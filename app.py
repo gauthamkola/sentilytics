@@ -3,7 +3,9 @@ import streamlit as st
 import plotly.express as px
 from transformers import pipeline
 from bertopic import BERTopic
+from bertopic.representation import KeyBERTInspired
 from sentence_transformers import SentenceTransformer
+from umap import UMAP
 
 # Title
 st.title("Sentilytics: AI-Powered Competitor Insights")
@@ -36,7 +38,8 @@ def load_data():
                 "rating": rating
             })
     df_reviews = pd.DataFrame(reviews)
-    return df_reviews[["review_text", "product", "rating"]].dropna(subset=["review_text"])
+    df_reviews["brand"] = df_reviews["product"].str.split().str[0]  # Extract brand
+    return df_reviews[["review_text", "product", "brand", "rating"]].dropna(subset=["review_text"])
 
 # Load data first
 df_full = load_data()
@@ -49,7 +52,7 @@ product_filter = st.sidebar.selectbox("Select Product", ["All"] + sorted(df_full
 
 # Apply filter
 df = df_full if product_filter == "All" else df_full[df_full["product"] == product_filter]
-df = df.head(1000)  # Limit for demo
+df = df.head(1000)
 
 # Display data
 st.subheader("Review Data")
@@ -57,25 +60,24 @@ st.write(f"Loaded {len(df)} reviews")
 st.dataframe(df.head())
 
 # Sentiment Analysis
-st.subheader("Sentiment Distribution")
+st.subheader("Sentiment Analysis")
 sentiment_pipeline = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
 df["sentiment"] = df["review_text"].apply(lambda x: sentiment_pipeline(x)[0]["label"])
-fig_sentiment = px.pie(df, names="sentiment", title="Sentiment Breakdown", hole=0.3, color_discrete_map={"POSITIVE": "#00CC96", "NEGATIVE": "#EF553B"})
-st.plotly_chart(fig_sentiment)
-
-# Sentiment by Product
-st.subheader("Sentiment by Product")
-sentiment_by_product = df.groupby("product")["sentiment"].value_counts(normalize=True).unstack().fillna(0) * 100
-fig_sentiment_product = px.bar(sentiment_by_product, barmode="stack", title="Sentiment by Product", color_discrete_map={"POSITIVE": "#00CC96", "NEGATIVE": "#EF553B"})
-st.plotly_chart(fig_sentiment_product)
+col1, col2 = st.columns(2)
+with col1:
+    fig_sentiment = px.pie(df, names="sentiment", title="Sentiment Breakdown", hole=0.3, color_discrete_map={"POSITIVE": "#00CC96", "NEGATIVE": "#EF553B"})
+    st.plotly_chart(fig_sentiment)
+with col2:
+    sentiment_by_product = df.groupby("product")["sentiment"].value_counts(normalize=True).unstack().fillna(0) * 100
+    fig_sentiment_product = px.bar(sentiment_by_product, barmode="stack", title="Sentiment by Product", color_discrete_map={"POSITIVE": "#00CC96", "NEGATIVE": "#EF553B"})
+    st.plotly_chart(fig_sentiment_product)
 
 # Topic Clustering
 st.subheader("Topic Clusters")
-if len(df) > 5:  # Minimum threshold for clustering
+if len(df) > 5:
     try:
         embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-        # Dynamically adjust UMAP n_components and min_topic_size
-        n_components = min(2, max(1, len(df) - 1))  # Ensure k < N
+        n_components = min(2, max(1, len(df) - 1))
         min_topic_size = max(2, min(10, len(df) // 5))
         topic_model = BERTopic(
             embedding_model=embedding_model,
@@ -83,14 +85,15 @@ if len(df) > 5:  # Minimum threshold for clustering
             n_gram_range=(1, 3),
             nr_topics=10,
             top_n_words=5,
-            umap_model=UMAP(n_components=n_components)  # Explicitly set UMAP
+            umap_model=UMAP(n_components=n_components),
+            representation_model=KeyBERTInspired()  # Cleaner topic names
         )
         topics, _ = topic_model.fit_transform(df["review_text"].tolist())
         df["topic"] = topics
         topic_info = topic_model.get_topic_info()
         topic_names = topic_info.set_index("Topic")["Name"].to_dict()
         df["topic_name"] = df["topic"].map(lambda x: topic_names.get(x, "Miscellaneous"))
-        fig_topics = px.histogram(df, x="topic_name", color="product", title="Topics by Product", barmode="group")
+        fig_topics = px.histogram(df, x="topic_name", color="brand", title="Topics by Brand", barmode="group")
         st.plotly_chart(fig_topics)
     except Exception as e:
         st.write(f"Topic clustering failed: {e}. Dataset may be too small.")
@@ -118,8 +121,6 @@ if "topic_name" in df.columns and df["topic_name"].nunique() > 1:
             pos = topic_sentiment.loc[topic, "POSITIVE"]
             neg = topic_sentiment.loc[topic, "NEGATIVE"]
             st.write(f"  - **{topic}**: {pos:.1f}% positive, {neg:.1f}% negative")
-else:
-    st.write("- **Key Topics**: Not enough data for meaningful topics.")
 
 st.write("### Recommendations")
 if pos_pct < 60:
@@ -133,4 +134,4 @@ for product, row in top_products.iterrows():
         st.write(f"- **Promote '{product}'**: Leverage its strong {row['sentiment']:.1f}% positive sentiment in marketing.")
 
 # Footer
-st.write("Powered by DistilBERT and BERTopic | Demo by xAI")
+st.write("Project done by Gautham kolagatla")
